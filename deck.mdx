@@ -1,0 +1,372 @@
+import { Notes, Appear } from 'mdx-deck';
+export { themes } from './theme';
+
+# How To Type
+
+<h1>
+    <Appear>
+        <span>E</span>
+        <span>V</span>
+        <span>E</span>
+        <span>R</span>
+        <span>Y</span>
+        <span>T</span>
+        <span>H</span>
+        <span>I</span>
+        <span>N</span>
+        <span>G</span>
+    </Appear>
+</h1>
+
+<Notes>
+    More seriously, I'm going to talk about a few TypeScript techniques you can use to get stricter
+    types. This talk assumes a moderate amount of TypeScript knowledge.
+</Notes>
+
+---
+
+## TypeScript
+
+-   Pretty great, but...
+-   `strict` only gets you so far.
+
+We'll cover a few ways to get stricter, more correct types.
+
+---
+
+## Type Philosophy
+
+<ul>
+    <Appear>
+        <li>Computers exist to serve humans.</li>
+        <li>Types are there to make sure stuff is correct.</li>
+        <li>Using types correctly should be easy.</li>
+        <li>Inference is your friend.</li>
+    </Appear>
+</ul>
+
+<Notes>
+    - I generally make the trade off of higher internal type complexity for an easier-to-use API. -
+    For Inference: The easiest way to use types is to not define types. My personal goal is to make
+    the typed version of an API identical to the plain JS version. That is to say, there is no type
+    information you need to manually provide.
+</Notes>
+
+---
+
+## Lying To The Compiler <sup>\*</sup>
+
+-   Don't be afraid to lie about what type something is.
+-   Lying lets you create more constrained types.
+-   Can save you time avoiding type rabbit holes.
+-   Don't be afraid to use `// @ts-ignore` or `as any`.
+
+<small>
+    <sup>* Not everyone agrees with this.</sup>
+</small>
+
+<Notes>
+    A "type rabbit hole" is a situation where you try to get an API typed, and as a result attempt
+    to correctly type everything that the API calls out to. If the API takes generics, this means
+    wiring generics through all of the methods used.
+</Notes>
+
+---
+
+# Here we go
+
+---
+
+## Generics
+
+-   Solve everything.
+-   If you have a problem, try adding more generics.
+-   Remember: Generic types can be inferred! Just because a function has a generic doesn't mean you need to manually provide it.
+
+---
+
+## Getting Literals
+
+-   You can use a generic to capture a literal type.
+-   The generics used will determine what literal value is captured.
+
+<Notes>Literals are types like `true`, `false`, `100`, `"foo"`.</Notes>
+
+---
+
+```ts
+function example<T extends object>(arg: T) {}
+
+// T will be `{ hello: string }`
+example({
+    hello: 'world'
+});
+```
+
+---
+
+```typescript
+// Getting the literal "world" value instead of `string`:
+function example<
+    T extends { [key: string]: V },
+    // Add another generic!
+    V extends string
+>(arg: T) {}
+
+// T will be `{ hello: 'world' }`
+example({
+    hello: 'world'
+});
+```
+
+---
+
+```typescript
+// Extract the literal sub-value:
+function example<
+    T extends { [key: string]: V },
+    V extends string,
+    // Moar generics!
+    K extends keyof T
+>(
+    obj: T,
+    key: K
+): T[K] {
+    return obj[key];
+}
+
+// Returns "world"
+example({ hello: 'world' }, 'hello');
+```
+
+---
+
+## Worth Noting...
+
+-   TypeScript can also help provide literals using `as const`.
+-   This requires you to modify the call site so it is less than ideal.
+
+---
+
+Here's a real-life example of using generics in multiple places to improve types.
+
+```typescript
+class Lodash<T extends object> {
+    constructor(private obj: T) {}
+
+    get<K extends keyof T>(key: K): T[K] {
+        return this.obj[key];
+    }
+}
+
+let obj = new Lodash({
+    foo: 'bar',
+    bar: 123
+});
+
+obj.get('foo'); // typeof string
+obj.get('bar'); // typeof number
+obj.get('hello'); // 💥
+```
+
+---
+
+## Chaining
+
+-   You can use method chaining to narrow types.
+-   Return a new instance from every method, using a more specific generic.
+-   As a bonus, you get an immutable interface for free.
+
+---
+
+```typescript
+class Lodash<T extends object> {
+    constructor(private obj: T) {}
+
+    subset<K extends keyof T>(...keys: K[]): Lodash<Pick<T, K>> {
+        return new Lodash(
+            keys.reduce((acc, key) => ({ ...acc, [key]: this.obj[key] }), {} as Pick<T, K>)
+        );
+    }
+
+    get<K extends keyof T>(key: K): T[K] {
+        return this.obj[key];
+    }
+}
+
+const obj = new Lodash({
+    foo: 'bar',
+    bar: 'baz',
+    hello: 'world'
+});
+
+obj.subset('foo', 'bar').get('hello'); // 💥
+```
+
+---
+
+## Stashing Types
+
+-   You can stash a type under a unique symbol to use it elsewhere.
+-   If you don't export the symbols in your main module, the stashed types aren't exposed to the user.
+
+```typescript
+const FOO_TYPE: unique symbol = Symbol('foo type');
+class Foo<T = any> {
+    // Stash the type for later:
+    [FOO_TYPE]: T;
+}
+```
+
+---
+
+#### Consuming Stashed Types
+
+```typescript
+Foo[typeof FOO_TYPE]; // Gets the stashed type.
+```
+
+```typescript
+function createBar<T extends Foo>(foo: T) {
+    return new Bar<T[typeof FOO_TYPE]>();
+}
+```
+
+---
+
+## Types Tags
+
+-   This lets us create types that are more constrained.
+-   Are not assignable without explicitly defining as the tagged type.
+
+```typescript
+type Name = string & { __tag: 'name' };
+let myName = 'Jordan' as Name;
+myName = 'Not Jordan'; // 💥
+```
+
+---
+
+## Generalized Tag
+
+We can generalize the tag concept using a generic.
+
+By leveraging a module-scoped symbol here, we create the type constraint, but don't leak it out,
+    so it's essentially invisible when using the type.
+
+```typescript
+const tag: unique symbol = Symbol('tag');
+
+type Tag<Name extends string> = {
+    [tag]: Name;
+};
+```
+
+---
+
+#### This will now break.
+
+```typescript
+type Name = string & Tag<'name'>;
+type Email = string & Tag<'email'>;
+
+let name = 'Jordan' as Name;
+let email = 'jgensler@netflix.com' as Email;
+
+name = email; // 💥
+```
+
+---
+
+#### This can be useful in models
+
+```ts
+type Name = string & Tag<'name'>;
+type Email = string & Tag<'email'>;
+type Age = number & Tag<'age'>;
+
+class User {
+    name: Name;
+    email: Email;
+    age: Age;
+
+    constructor(name: string, email: string, age: number) {
+        this.name = name as Name;
+        this.email = email as Email;
+        this.age = age as Age;
+    }
+}
+```
+
+---
+
+## Class Constraints
+
+-   Similar to what we had with tagged types.
+-   You can use generics to create type constraints on classes.
+-   The generic value must be used somewhere in the class to create a constraint.
+-   Use `any` when you don't want to enforce a constraint.
+
+<Notes>
+    - The third point is important to remember, because simply adding a generic that isn't used
+    won't do anything. - This is a more complicated concept that is challenging to give examples
+    for. In a project I'm working on, we use it to define functions that accept classes that are in
+    some specific state as a result of method calls.
+</Notes>
+
+---
+
+```typescript
+const CHAINED: unique symbol = Symbol('chained');
+class Lodash<T extends object, Chained extends boolean = false> {
+    [CHAINED]: Chained;
+
+    constructor(private obj: T) {}
+
+    partial<K extends keyof T>(...keys: K[]): Lodash<Pick<T, K>, true> {
+        // @ts-ignore Pretend that there is an implementation here.
+        return;
+    }
+}
+
+function logDash(lodash: Lodash<{ foo: any }, any>) {
+    console.log(lodash);
+}
+
+logDash(new Lodash({ foo: 'bar', bar: 'baz' }));
+logDash(new Lodash({ foo: 'bar', bar: 'baz' }).partial('foo'));
+logDash(new Lodash({ foo: 'bar', bar: 'baz' }).partial('bar')); // 💥
+```
+
+---
+
+```typescript
+const CHAINED: unique symbol = Symbol('chained');
+class Lodash<T extends object, Chained extends boolean = false> {
+    [CHAINED]: Chained;
+
+    constructor(private obj: T) {}
+
+    partial<K extends keyof T>(...keys: K[]): Lodash<Pick<T, K>, true> {
+        // @ts-ignore Pretend that there is an implementation here.
+        return;
+    }
+}
+
+function logBareDash(lodash: Lodash<any, false>) {
+    console.log(lodash);
+}
+
+logBareDash(new Lodash({ foo: 'bar', bar: 'baz' }));
+logBareDash(new Lodash({ foo: 'bar', bar: 'baz' }).partial('bar')); // 💥
+```
+
+---
+
+# The end
+
+---
+
+## Shameless Plug
+
+Twitch: twitch.tv/VapeJuiceJordan
